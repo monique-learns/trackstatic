@@ -132,6 +132,7 @@ import {
   type SummaryCardProps,
 } from "@/components/dashboard/summary-card";
 import { calculateDashboardData } from "@/lib/dashboard-utils";
+import { addAccountToSheet } from "@/lib/google-sheet-utils";
 
 // Inline SVG for a simple, geometric logo
 const AppLogo = () => (
@@ -972,14 +973,14 @@ export default function HomePage() {
     handleCloseTransactionEditDialog();
   };
 
-  const addAccount = (
+  const addAccount = async (
     newAccountData: Omit<Account, "id" | "currency" | "balance">
   ) => {
     const newAccount: Account = {
       ...newAccountData,
       id: crypto.randomUUID(),
       balance: 0,
-      currency: "",
+      currency: "", // Default currency, can be configured
       statementClosingDay:
         newAccountData.statementClosingDay === null
           ? undefined
@@ -992,8 +993,57 @@ export default function HomePage() {
     const updatedAccounts = [...accounts, newAccount].sort((a, b) =>
       a.name.localeCompare(b.name)
     );
-    setAccounts(updatedAccounts);
+    setAccounts(updatedAccounts); // Save to localStorage via state update
 
+    setIsAccountFormDialogOpen(false); // Close dialog immediately for better UX
+
+    // Prepare payload for Google Sheet - keys must match HEADERS_ACCOUNTS in Code.gs
+    const sheetPayload = {
+      ID: newAccount.id,
+      Name: newAccount.name,
+      Type: newAccount.type,
+      Balance: newAccount.balance,
+      Currency: newAccount.currency,
+      StatementClosingDay: newAccount.statementClosingDay,
+      PreferredPaymentDay: newAccount.preferredPaymentDay,
+      Notes: newAccount.notes,
+    };
+
+    try {
+      const sheetResponse = await addAccountToSheet(sheetPayload);
+      if (sheetResponse && sheetResponse.success) {
+        toast({
+          title: "Account Synced",
+          description: `Account "${newAccount.name}" also saved to Google Sheet.`,
+          duration: 3000,
+        });
+      } else {
+        toast({
+          title: "Account Saved Locally",
+          description: `Account "${
+            newAccount.name
+          }" saved. Failed to sync to Google Sheet: ${
+            sheetResponse?.error || sheetResponse?.message || "Unknown error"
+          }`,
+          variant: "default",
+          duration: 5000,
+        });
+        console.warn(
+          "Failed to save account to Google Sheet or response was not successful:",
+          sheetResponse
+        );
+      }
+    } catch (error: any) {
+      console.error("Error saving account to Google Sheet:", error);
+      toast({
+        title: "Account Saved Locally",
+        description: `Account "${newAccount.name}" saved. Could not connect to sync to Google Sheet. Error: ${error.message}`,
+        variant: "default",
+        duration: 7000,
+      });
+    }
+
+    // Existing logic after local save and sheet attempt
     if (newAccount.statementClosingDay && appStartDate) {
       triggerAutomaticStatementGeneration(
         updatedAccounts,
@@ -1002,7 +1052,6 @@ export default function HomePage() {
         appStartDate
       );
     }
-    setIsAccountFormDialogOpen(false);
   };
 
   const handleOpenAccountEditDialog = (account: Account) => {
@@ -1057,7 +1106,7 @@ export default function HomePage() {
     if (editingAccount) {
       handleUpdateAccount(data);
     } else {
-      addAccount(data);
+      addAccount(data); // This is now async but we don't await it here
     }
   };
 
